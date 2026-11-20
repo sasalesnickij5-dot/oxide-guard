@@ -280,6 +280,8 @@ class _TimersTabState extends State<TimersTab> {
           android: AndroidNotificationDetails('rot', 'Гниение',
               importance: Importance.high, priority: Priority.high)),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
 

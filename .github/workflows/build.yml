@@ -1,0 +1,47 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Create project and copy files
+        run: |
+          flutter create --org com.example --project-name oxide_guard app
+          cp main.dart app/lib/main.dart
+          cp pubspec.yaml app/pubspec.yaml
+          cp AndroidManifest.xml app/android/app/src/main/AndroidManifest.xml
+      - name: Patch gradle
+        run: |
+          cd app/android/app
+          F=$(ls build.gradle.kts build.gradle 2>/dev/null | head -1)
+          sed -i -E 's/minSdk(Version)?\s*=?\s*flutter\.minSdkVersion/minSdk = 24/' $F
+          if [ "$F" = "build.gradle.kts" ]; then
+            sed -i 's/compileOptions {/compileOptions {\n        isCoreLibraryDesugaringEnabled = true/' $F
+            printf '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n' >> $F
+          else
+            sed -i 's/compileOptions {/compileOptions {\n        coreLibraryDesugaringEnabled true/' $F
+            printf "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n" >> $F
+          fi
+      - name: Build APK
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build apk --release --no-shrink
+      - name: Publish release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Oxide Guard v${{ github.run_number }}
+          files: app/build/app/outputs/flutter-apk/app-release.apk

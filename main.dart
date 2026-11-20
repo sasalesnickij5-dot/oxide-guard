@@ -11,7 +11,7 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:vibration/vibration.dart';
 
 // ===== НАСТРОЙКИ (меняй под себя) =====
-const protectHours = 12; // сколько дом не гниёт после закладки ресурсов
+const maxProtectHours = 240; // верхний предел ввода (часов), только от опечаток
 const rotDuration = Duration(hours: 10, minutes: 20); // от начала гниения до разрушения
 const trigger1 = 'база атакована'; // тревога 1 (в нижнем регистре)
 const trigger2 = 'ваш персонаж подвергся нападению'; // тревога 2
@@ -265,10 +265,12 @@ class _TimersTabState extends State<TimersTab> {
 
   void _save() => prefs.setString('houses', jsonEncode(houses));
   DateTime _start(Map h) => DateTime.fromMillisecondsSinceEpoch(h['s'] as int);
+  Duration _protect(Map h) => Duration(minutes: (h['p'] as int?) ?? 12 * 60);
+  String _hoursText(int m) => m % 60 == 0 ? '${m ~/ 60}' : (m / 60).toStringAsFixed(1);
 
   Future<void> _schedule(Map h) async {
     final id = h['id'] as int;
-    final rotAt = _start(h).add(const Duration(hours: protectHours));
+    final rotAt = _start(h).add(_protect(h));
     await notif.cancel(id);
     if (!rotAt.isAfter(DateTime.now())) return;
     await notif.zonedSchedule(
@@ -285,24 +287,49 @@ class _TimersTabState extends State<TimersTab> {
     );
   }
 
-  Future<void> _add() async {
-    final c = TextEditingController();
-    final name = await showDialog<String>(
+  // Диалог: название дома + на сколько часов закинул ресурсы
+  Future<Map<String, dynamic>?> _ask({String name = '', String hours = ''}) {
+    final nameC = TextEditingController(text: name);
+    final hoursC = TextEditingController(text: hours);
+    return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Новый дом'),
-        content: TextField(
-            controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Название')),
+        scrollable: true,
+        title: const Text('Сколько часов закинул?'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+              controller: nameC,
+              decoration: const InputDecoration(labelText: 'Название дома')),
+          TextField(
+            controller: hoursC,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Часов пропитки (например 5 или 24)', hintText: '5'),
+          ),
+        ]),
         actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, c.text.trim().isEmpty ? 'Дом' : c.text.trim()),
-              child: const Text('Закинул ресурсы')),
+            onPressed: () {
+              final v = double.tryParse(hoursC.text.replaceAll(',', '.').trim());
+              if (v == null || v <= 0) return;
+              Navigator.pop(ctx, {
+                'n': nameC.text.trim().isEmpty ? 'Дом' : nameC.text.trim(),
+                'p': (v.clamp(0.1, maxProtectHours.toDouble()) * 60).round(),
+              });
+            },
+            child: const Text('Запустить'),
+          ),
         ],
       ),
     );
-    if (name == null) return;
+  }
+
+  Future<void> _add() async {
+    final r = await _ask();
+    if (r == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final h = <String, dynamic>{'id': now % 1000000000, 'n': name, 's': now};
+    final h = <String, dynamic>{'id': now % 1000000000, 'n': r['n'], 'p': r['p'], 's': now};
     houses.add(h);
     _save();
     await _schedule(h);
@@ -310,7 +337,7 @@ class _TimersTabState extends State<TimersTab> {
   }
 
   Widget _card(Map<String, dynamic> h, DateTime now) {
-    final rotAt = _start(h).add(const Duration(hours: protectHours));
+    final rotAt = _start(h).add(_protect(h));
     final deadAt = rotAt.add(rotDuration);
     final rotting = !now.isBefore(rotAt);
     final dead = !now.isBefore(deadAt);
@@ -324,6 +351,11 @@ class _TimersTabState extends State<TimersTab> {
               tooltip: 'Снова закинул ресурсы',
               icon: const Icon(Icons.restart_alt),
               onPressed: () async {
+                final r = await _ask(
+                    name: h['n'] as String, hours: _hoursText(_protect(h).inMinutes));
+                if (r == null) return;
+                h['n'] = r['n'];
+                h['p'] = r['p'];
                 h['s'] = DateTime.now().millisecondsSinceEpoch;
                 _save();
                 await _schedule(h);
@@ -340,6 +372,8 @@ class _TimersTabState extends State<TimersTab> {
               },
             ),
           ]),
+          Text('Закинуто на ${_hoursText(_protect(h).inMinutes)} ч',
+              style: const TextStyle(color: Colors.white54)),
           const SizedBox(height: 8),
           Text(rotting ? 'До начала гниения: уже гниёт 🟠' : 'До начала гниения: ${_fmt(rotAt.difference(now))}'),
           Text(dead ? 'Дом разрушен 💀' : 'До полного разрушения: ${_fmt(deadAt.difference(now))}',
